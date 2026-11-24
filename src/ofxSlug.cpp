@@ -53,9 +53,18 @@ ofxSlug::Style ofxSlug::defaultValue() const {
 	return styles.empty() ? Style{} : styles.begin()->second;
 }
 
+const ofxSlugFont *ofxSlug::fontForGlyph(const std::string &fontID, const std::string &text) const {
+	auto primary = fonts.find(fontID);
+	if(primary == fonts.end()) return nullptr;
+	if(primary->second->hasGlyph(text)) return primary->second.get();
+	auto fallback = fonts.find(globalFallbackFont);
+	if(fallback != fonts.end() && fallback->second->hasGlyph(text)) return fallback->second.get();
+	return primary->second.get();
+}
+
 float ofxSlug::measure(const std::string &text, const Style &s) const {
-	auto it = fonts.find(s.fontID);
-	return it == fonts.end() ? 0 : it->second->stringWidth(text) * s.fontSize / baseSize + (text.empty() ? 0 : s.spacing);
+	const auto *font = fontForGlyph(s.fontID, text);
+	return font ? font->stringWidth(text) * s.fontSize / baseSize + (text.empty() ? 0 : s.spacing) : 0;
 }
 
 void ofxSlug::parseNode(const pugi::xml_node &node, const Style &inherited, std::vector<Item> &out) const {
@@ -227,9 +236,9 @@ ofRectangle ofxSlug::inkBounds(const std::vector<Item> &items, float x, float y,
 	for(const auto &line : lines) {
 		float pen = x;
 		for(const auto &item : line.items) {
-			auto it = fonts.find(item.style.fontID);
-			if(it != fonts.end() && item.text != " " && item.text != "\t") {
-				auto b = it->second->getStringBoundingBox(item.text, 0, 0);
+			const auto *font = fontForGlyph(item.style.fontID, item.text);
+			if(font && item.text != " " && item.text != "\t") {
+				auto b = font->getStringBoundingBox(item.text, 0, 0);
 				if(b.width > 0 && b.height > 0) {
 					float scale = item.style.fontSize / baseSize;
 					float l = pen + b.x * scale, t = y + top + line.maxSize + b.y * scale;
@@ -260,7 +269,11 @@ ofRectangle ofxSlug::inkBounds(const std::vector<Item> &items, float x, float y,
 
 ofRectangle ofxSlug::render(const std::vector<Item> &items, float x, float y, float width, ofAlignHorz align, bool debugDraw, int tabWidth,
 							bool baseline) const {
-	auto lines = layout(items, width, tabWidth);
+	return renderLines(layout(items, width, tabWidth), x, y, width, align, debugDraw, baseline);
+}
+
+ofRectangle ofxSlug::renderLines(const std::vector<Line> &lines, float x, float y, float width, ofAlignHorz align, bool debugDraw,
+								 bool baseline) const {
 	if(lines.empty())
 		return ofRectangle(x, y, 0, 0);
 	if(baseline)
@@ -293,9 +306,8 @@ ofRectangle ofxSlug::render(const std::vector<Item> &items, float x, float y, fl
 		}
 
 		for(const auto &item : line.items) {
-			auto it = fonts.find(item.style.fontID);
-			if(it != fonts.end() && item.text != " " && item.text != "\t") {
-				const auto *font = it->second.get();
+			const auto *font = fontForGlyph(item.style.fontID, item.text);
+			if(font && item.text != " " && item.text != "\t") {
 				if(batchFont && batchFont != font)
 					flush();
 				batchFont = font;
@@ -365,6 +377,59 @@ ofRectangle ofxSlug::render(const std::vector<Item> &items, float x, float y, fl
 	ofPopStyle();
 	return box;
 }
+void ofxSlug::assignWordIndices(std::vector<Item> &items) const {
+	size_t nextWord = 0;
+	size_t currentWord = noWord;
+	for(auto &item : items) {
+		if(item.text == " " || item.text == "\t" || item.text == "\r" || item.text == "\n") {
+			currentWord = noWord;
+			item.wordIndex = noWord;
+		} else {
+			if(currentWord == noWord)
+				currentWord = nextWord++;
+			item.wordIndex = currentWord;
+		}
+	}
+}
+
+std::vector<ofxSlug::Item> ofxSlug::parseStyledText(const std::string &text) const {
+	auto items = formatted(text);
+	assignWordIndices(items);
+	return items;
+}
+
+std::vector<ofxSlug::Item> ofxSlug::parseText(const std::string &text, const Style &style) const {
+	auto items = plain(text, style);
+	assignWordIndices(items);
+	return items;
+}
+
+ofxSlug::Layout ofxSlug::layoutLines(const std::vector<Item> &items, float width, ofAlignHorz align, size_t maxLines) const {
+	Layout result;
+	result.width = width;
+	result.alignment = align;
+	if(width <= 0)
+		return result;
+	std::vector<Item> measured;
+	for(const auto &item : items) {
+		for(const auto &character : codepoints(item.text)) {
+			float advance = character == "\n" ? 0 : measure(character, item.style);
+			measured.push_back({character, item.style, advance});
+		}
+	}
+	assignWordIndices(measured);
+	result.lines = layout(measured, width, tabWidth);
+	if(maxLines > 0 && result.lines.size() > maxLines) {
+		result.truncated = true;
+		result.lines.resize(maxLines);
+	}
+	return result;
+}
+
+ofRectangle ofxSlug::drawLines(const Layout &layout, float x, float y, bool debug) const {
+	return renderLines(layout.lines, x, y, layout.width, layout.alignment, debug, true);
+}
+
 ofxSlug::ofxSlug() {
 }
 
@@ -377,6 +442,7 @@ void ofxSlug::clear() {
 	fonts.clear();
 	styles.clear();
 	defaultStyle.clear();
+	globalFallbackFont.clear();
 }
 
 bool ofxSlug::addFont(const std::string &id, const std::string &file, const std::string &glyphs) {
@@ -441,6 +507,18 @@ void ofxSlug::setDefaultStyle(const std::string &id) {
 void ofxSlug::setLineHeightMult(float m) {
 	if(m > 0)
 		lineHeight = m;
+}
+
+void ofxSlug::setGlobalFallbackFont(const std::string &fontID) {
+	if(!fontID.empty() && !isFontLoaded(fontID)) {
+		ofLogWarning("ofxSlug") << "Unknown fallback font: " << fontID;
+		return;
+	}
+	globalFallbackFont = fontID;
+}
+
+std::string ofxSlug::getGlobalFallbackFont() const {
+	return globalFallbackFont;
 }
 
 float ofxSlug::draw(const std::string &text, const Style &s, float x, float y) {

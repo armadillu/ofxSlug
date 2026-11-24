@@ -16,6 +16,7 @@ class ofxSlugFont {
 	bool load(const std::string &fontPath, float size, const std::string &glyphs = "");
 	void clear();
 	bool isLoaded() const;
+	bool hasGlyph(const std::string &text) const;
 	// Tight outline bounds in local drawing coordinates (excluding antialiasing).
 	ofRectangle getStringBoundingBox(const std::string &text, float x, float baselineY) const;
 	float stringWidth(const std::string &text) const;

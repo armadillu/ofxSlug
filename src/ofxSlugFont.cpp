@@ -142,6 +142,12 @@ bool ofxSlugFont::isLoaded() const {
 	return loaded;
 }
 
+bool ofxSlugFont::hasGlyph(const std::string &text) const {
+	if(!loaded) return false;
+	auto chars = decode(text);
+	return chars.size() == 1 && atlas.hasKey(chars.front());
+}
+
 bool ofxSlugFont::load(const std::string &path, float size, const std::string &glyphs) {
 	clear();
 	if(size <= 0 || !ofIsGLProgrammableRenderer()) {
