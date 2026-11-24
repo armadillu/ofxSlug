@@ -1,0 +1,13 @@
+keyPressed()=1|1
+8 testDiyFormattedLayout()=1|1
+6 testDrawFormattedColumn()=1|0
+5 testDrawFormatted()=1|1
+GL_d=1|1
+4 testDrawTabs()=1|1
+3 testDrawColumnNVG()=1|0
+2 testDrawColumn()=1|0
+1 testDrawBatch()=1|1
+0 testDraw()=1|1
+draw()=1|1
+7 testDiyPlainLayout()=1|0
+update()=1|1
